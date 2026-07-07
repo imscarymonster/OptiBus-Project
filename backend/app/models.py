@@ -1,7 +1,10 @@
-"""ORM 模型定义模块。"""
+"""OptiBus 系统 ORM 模型定义。"""
 
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
+from datetime import datetime
+
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
+
 from .database import Base
 
 
@@ -9,47 +12,55 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
-    username = Column(String(128), unique=True, nullable=False)
-    email = Column(String(256), unique=True, nullable=False)
-    hashed_password = Column(String(256), nullable=False)
+    username = Column(String(128), unique=True, nullable=False, index=True)
     role = Column(String(50), nullable=False, default="passenger")
-    created_at = Column(DateTime)
-
-    dispatch_logs = relationship("DispatchLog", back_populates="user")
+    status = Column(String(50), nullable=False, default="active")
 
 
 class Route(Base):
     __tablename__ = "routes"
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(256), nullable=False)
-    origin_station_id = Column(Integer, ForeignKey("stations.id"))
-    destination_station_id = Column(Integer, ForeignKey("stations.id"))
-    description = Column(Text)
+    route_name = Column(String(255), nullable=False, index=True)
+    default_bus_count = Column(Integer, nullable=False, default=1)
 
-    origin_station = relationship("Station", foreign_keys=[origin_station_id])
-    destination_station = relationship("Station", foreign_keys=[destination_station_id])
+    stations = relationship("Station", back_populates="route", cascade="all, delete-orphan")
+    from_dispatch_logs = relationship(
+        "DispatchLog",
+        foreign_keys="DispatchLog.from_route_id",
+        back_populates="from_route",
+        cascade="all, delete-orphan",
+    )
+    to_dispatch_logs = relationship(
+        "DispatchLog",
+        foreign_keys="DispatchLog.to_route_id",
+        back_populates="to_route",
+        cascade="all, delete-orphan",
+    )
 
 
 class Station(Base):
     __tablename__ = "stations"
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(256), nullable=False)
-    address = Column(String(512))
-    latitude = Column(String(64))
-    longitude = Column(String(64))
+    route_id = Column(Integer, ForeignKey("routes.id"), nullable=False, index=True)
+    station_name = Column(String(255), nullable=False)
+    sequence = Column(Integer, nullable=False, default=1)
+    latitude = Column(String(64), nullable=True)
+    longitude = Column(String(64), nullable=True)
+
+    route = relationship("Route", back_populates="stations")
 
 
 class DispatchLog(Base):
     __tablename__ = "dispatch_logs"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    route_id = Column(Integer, ForeignKey("routes.id"), nullable=False)
-    status = Column(String(50), nullable=False)
-    created_at = Column(DateTime)
-    notes = Column(Text)
+    bus_id = Column(Integer, nullable=False, index=True)
+    from_route_id = Column(Integer, ForeignKey("routes.id"), nullable=False, index=True)
+    to_route_id = Column(Integer, ForeignKey("routes.id"), nullable=False, index=True)
+    trigger_time = Column(DateTime, nullable=False, default=datetime.utcnow)
+    complete_time = Column(DateTime, nullable=True)
 
-    user = relationship("User", back_populates="dispatch_logs")
-    route = relationship("Route")
+    from_route = relationship("Route", foreign_keys=[from_route_id], back_populates="from_dispatch_logs")
+    to_route = relationship("Route", foreign_keys=[to_route_id], back_populates="to_dispatch_logs")

@@ -2,65 +2,72 @@
 
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, EmailStr
+
+from pydantic import BaseModel, ConfigDict
+
+
+class OptiBusBaseModel(BaseModel):
+    """为所有响应模型提供 ORM 兼容配置。"""
+
+    if ConfigDict is not None:
+        model_config = ConfigDict(from_attributes=True)
+    else:
+        class Config:
+            orm_mode = True
 
 
 class UserBase(BaseModel):
     username: str
-    email: EmailStr
     role: Optional[str] = "passenger"
+    status: Optional[str] = "active"
 
 
-class UserCreate(UserBase):
-    password: str
-
-
-class UserRead(UserBase):
+class UserRead(UserBase, OptiBusBaseModel):
     id: int
-    created_at: Optional[datetime]
-
-    class Config:
-        orm_mode = True
-
-
-class StationBase(BaseModel):
-    name: str
-    address: Optional[str] = None
-    latitude: Optional[str] = None
-    longitude: Optional[str] = None
-
-
-class StationRead(StationBase):
-    id: int
-
-    class Config:
-        orm_mode = True
 
 
 class RouteBase(BaseModel):
-    name: str
-    origin_station_id: int
-    destination_station_id: int
-    description: Optional[str] = None
+    route_name: str
+    default_bus_count: int = 1
 
 
-class RouteRead(RouteBase):
+class RouteRead(RouteBase, OptiBusBaseModel):
     id: int
 
-    class Config:
-        orm_mode = True
+
+class StationBase(BaseModel):
+    route_id: int
+    station_name: str
+    sequence: int = 1
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+
+
+class StationRead(StationBase, OptiBusBaseModel):
+    id: int
 
 
 class DispatchLogBase(BaseModel):
-    user_id: int
-    route_id: int
-    status: str
-    notes: Optional[str] = None
+    bus_id: int
+    from_route_id: int
+    to_route_id: int
+    trigger_time: Optional[datetime] = None
+    complete_time: Optional[datetime] = None
 
 
-class DispatchLogRead(DispatchLogBase):
+class DispatchLogRead(DispatchLogBase, OptiBusBaseModel):
     id: int
-    created_at: Optional[datetime]
 
-    class Config:
-        orm_mode = True
+
+class DriverDailyCheckIn(BaseModel):
+    """司机每日发车打卡。"""
+
+    driver_id: int
+    route_id: int
+
+
+class LocationUpdate(BaseModel):
+    """司机高频坐标上报。"""
+
+    lat: float
+    lng: float
