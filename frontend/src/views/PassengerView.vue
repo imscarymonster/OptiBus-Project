@@ -57,7 +57,7 @@
           <div class="bg-blue-50 rounded-lg p-3 border border-blue-100 text-left space-y-2">
             <p class="text-gray-600 text-sm flex justify-between">当前候车：<span class="font-bold text-gray-800">{{ selectedStation.nameCN }}</span></p>
             <p class="text-gray-600 text-sm flex justify-between">目标线路：<span class="font-bold text-blue-600">{{ selectedLine }}</span></p>
-            <p class="text-gray-600 text-sm flex justify-between">预计到达：<span class="text-green-600 font-bold">约 3 分钟</span></p>
+            <p class="text-gray-600 text-sm flex justify-between">预计到达: <span class="text-green-600 font-bold">{{ etaText }}</span></p>
           </div>
 
           <button @click="cancelWaiting" class="w-full py-3 bg-red-50 text-red-600 font-bold rounded-xl hover:bg-red-100 transition-all border border-red-200 active:scale-95">
@@ -71,20 +71,23 @@
 </template>
 
 <script setup>
-import { ref } from 'vue';
+import { ref, onUnmounted } from 'vue';
 import MapCanvas from '../components/MapCanvas.vue';
+import axios from 'axios'; // 记得引入 axios，如果你用的是封装的 request.js，可以替换掉这行
 
-const selectedStation = ref(null); // 现在存的是整个站点对象
-const selectedLine = ref('');      // 存用户选的具体哪条线
+const selectedStation = ref(null);
+const selectedLine = ref('');
 const isWaiting = ref(false);
 
+// 🚀 新增：用来存储真实的预计到达时间
+const etaText = ref('计算中...'); 
+let etaTimer = null; // 用来存定时器
+
 const handleStationSelect = (station) => {
-  if (isWaiting.value) return; 
-  
+  if (isWaiting.value) return;
   selectedStation.value = station;
-  selectedLine.value = ''; // 每次点新站点，清空上一次选的线路
+  selectedLine.value = '';
   
-  // 智能体验优化：如果这个站只有 1 条线经过，自动帮乘客选中，省去一次点击！
   if (station.lines && station.lines.length === 1) {
     selectedLine.value = station.lines[0];
   }
@@ -95,16 +98,91 @@ const cancelSelection = () => {
   selectedLine.value = '';
 };
 
-const confirmWaiting = () => {
-  if (!selectedLine.value) return; // 没选线路不让点确认
-  isWaiting.value = true;
+// 🚀 新增：专门去后端拿 ETA 数据的函数
+const fetchETA = async () => {
+  if (!selectedStation.value || !selectedLine.value) return;
+  
+  try {
+    // 使用队友给的新接口和新 IP，拼上 route 参数过滤线路！
+    const url = `http://10.180.21.71:8000/api/eta/${selectedStation.value.nameCN}?route=${selectedLine.value}`;
+    const res = await axios.get(url);
+    
+    // 假设后端返回的数据里有时间字段（具体字段名根据你队友给的 JSON 调整，这里假设直接返回字符串或者 res.data.time）
+    // 如果返回的是纯文本或数字，你可以直接写 etaText.value = res.data + ' 分钟';
+    etaText.value = res.data; 
+  } catch (error) {
+    console.error('获取预计到达时间失败:', error);
+    etaText.value = '获取失败';
+  }
 };
 
-const cancelWaiting = () => {
+// 🚀 1. 在 <script setup> 顶部附近，给这个手机生成一个随机的用户 ID
+const currentUserId = ref('user_' + Math.random().toString(36).substring(2, 9));
+
+// 💡 辅助函数：把中文线路名转成后端可能需要的拼音/英文 key (如果后端直接认"1号线"可以不用这个)
+const getRouteKey = (lineName) => {
+  if (lineName.includes('1')) return 'line1_cw';
+  if (lineName.includes('2')) return 'line2_cw';
+  return lineName;
+};
+
+// ==========================================
+// 🚀 2. 确认乘车 (加入排队) - 终极适配版
+// ==========================================
+const confirmWaiting = async () => {
+  if (!selectedLine.value) return;
+  isWaiting.value = true;
+  etaText.value = '计算中...'; 
+  
+  try {
+    await axios.post('http://10.180.21.71:8000/api/dispatch/passenger_action', {
+      user_id: currentUserId.value,
+      route_key: getRouteKey(selectedLine.value), 
+      action: 'join',
+      station_id: selectedStation.value.nameCN
+    });
+    console.log('✅ 已通知后端大脑：加入排队！');
+  } catch (error) {
+    console.error('❌ 发送排队信息失败:', error);
+  }
+
+  fetchETA(); 
+  etaTimer = setInterval(fetchETA, 3000); 
+};
+
+// ==========================================
+// 🚀 3. 撤销乘车 (离开排队) - 优雅降级秒关版
+// ==========================================
+const cancelWaiting = async () => {
+  const stationName = selectedStation.value?.nameCN;
+  const lineName = selectedLine.value;
+
+  // UI 瞬间关闭，不卡顿
   isWaiting.value = false;
   selectedStation.value = null;
   selectedLine.value = '';
+  if (etaTimer) clearInterval(etaTimer); 
+
+  // 后台悄悄发请求撤销
+  if (stationName && lineName) {
+    try {
+      await axios.post('http://10.180.21.71:8000/api/dispatch/passenger_action', {
+        user_id: currentUserId.value,
+        route_key: getRouteKey(lineName),
+        action: 'leave',
+        station_id: stationName
+      });
+      console.log('✅ 已通知后端大脑：离开排队！');
+    } catch (error) {
+      console.error('❌ 发送取消排队信息失败:', error);
+    }
+  }
 };
+
+// 🚀 页面销毁时清理定时器，防止内存泄漏
+onUnmounted(() => {
+  if (etaTimer) clearInterval(etaTimer);
+});
 </script>
 
 <style scoped>
