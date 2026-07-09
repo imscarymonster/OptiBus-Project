@@ -33,31 +33,69 @@
 OptiBus/
 ├── README.md
 ├── requirements.txt              # Python 后端依赖
+├── .env                          # 环境变量（DATABASE_URL / REDIS_URL）
 │
 ├── backend/
-│   ├── .env                      # 环境变量（DATABASE_URL / REDIS_URL）
+│   ├── main.py                   # 备用入口（指向 app.main）
 │   └── app/
 │       ├── main.py               # ★ 核心文件（~1700行）：ETA算法、调度引擎、
 │       │                         #    发车模拟器、GPS转换、全部HTTP接口、WebSocket路由
-│       ├── database.py           # SQLAlchemy + Redis 连接配置
-│       ├── schemas.py            # Pydantic 数据校验模型
-│       └── websocket.py          # WebSocket 连接管理器（按角色分类）
+│       ├── database.py           # SQLAlchemy + Redis 连接池配置
+│       ├── schemas.py            # Pydantic 数据校验（DriverDailyCheckIn / LocationUpdate）
+│       ├── models.py             # SQLAlchemy ORM 模型定义（User / Route / Station / DispatchLog）
+│       ├── websocket.py          # WebSocket 连接管理器（ConnectionManager 类）
+│       ├── api/
+│       │   ├── __init__.py
+│       │   └── routes.py         # 路由骨架（占位）
+│       ├── core/
+│       │   └── scheduler.py      # 调度器骨架（占位）
+│       └── models/
+│           ├── __init__.py
+│           └── bus_models.py     # 公交领域模型（占位）
 │
 ├── frontend/
-│   ├── index.html
-│   ├── package.json
+│   ├── index.html                # SPA 入口（含 viewport meta）
+│   ├── package.json              # Vue3 / Vite5 / TailwindCSS3 / Axios
 │   ├── vite.config.js            # 开发代理 /api → :8000, /ws → :8000
+│   ├── tailwind.config.js
+│   ├── postcss.config.js
 │   └── src/
 │       ├── main.js               # Vue 应用入口
-│       ├── router/index.js       # 路由表 + 导航守卫
+│       ├── App.vue               # 根组件
+│       ├── style.css             # TailwindCSS 基础指令
+│       ├── router/
+│       │   └── index.js          # ★ 路由表 + 导航守卫（角色权限校验）
 │       ├── components/
-│       │   └── MapCanvas.vue     # ★ SVG 园区路网（站点/线路/车辆动画）
-│       └── views/
-│           ├── PassengerView.vue # ★ 乘客端：站点选择 → ETA 倒计时
-│           ├── DriverView.vue    # ★ 司机端：GPS 上报 + 调度接收 + TTS 播报
-│           ├── AdminView.vue     # ★ 管理端：监控看板 + 运力预警
-│           └── LoginView.vue     # 统一登录页
+│       │   ├── MapCanvas.vue     # ★ SVG 园区路网（站点/线路/车辆/图例）
+│       │   ├── Header.vue        # 公共头部（占位）
+│       │   ├── BusIcon.vue       # 车辆图标（占位）
+│       │   └── StationCircle.vue # 站点圆圈（占位）
+│       ├── views/
+│       │   ├── PassengerView.vue # ★ 乘客端：站点选择 → ETA 倒计时
+│       │   ├── DriverView.vue    # ★ 司机端：GPS + WebSocket + TTS + 模拟行驶
+│       │   ├── AdminView.vue     # ★ 管理端：监控看板 + 排班 + 运力预警
+│       │   ├── LoginView.vue     # 统一登录页
+│       │   └── HomeView.vue      # 首页入口（占位）
+│       ├── api/
+│       │   ├── index.js          # API 封装（占位）
+│       │   ├── request.js        # Axios 实例（占位）
+│       │   └── busService.js     # 车辆服务（占位）
+│       ├── store/
+│       │   └── bus.js            # Pinia 状态（占位）
+│       └── utils/
+│           ├── websocket.js      # WebSocket 客户端（占位）
+│           └── tts.js            # TTS 播报工具（占位）
+│
+├── database/
+│   └── seed_data.json            # 初始种子数据
+│
+└── docs/
+    ├── SystemArchitecture.md      # 系统架构文档（初稿）
+    └── VibeLogs/
+        └── vibe_log_01.md        # 项目迭代日志（空）
 ```
+
+> 标注"占位"的文件为预留模块骨架，实际业务逻辑集中在打 ★ 的核心文件中。
 
 ## 5. 环境要求
 
