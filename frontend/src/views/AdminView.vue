@@ -178,51 +178,40 @@ const handleBusCountUpdate = (count) => {
 };
 
 
-// 🚀 终极测试：一键触发柔性调度大招
+// 🚀 一键触发柔性调度：分批注入避免打爆云Redis
 const simulateMassiveCrowd = async () => {
-  const confirmMsg = "确定要向【公共教学楼】瞬间注入 40 名排队乘客吗？这将立刻触发后端的跨线调度大招！";
+  const confirmMsg = "确定要向【公共教学楼】注入 40 名排队乘客吗？这将立刻触发后端的跨线调度！";
   if (!confirm(confirmMsg)) return;
 
-  console.log("🔥 开始执行高并发注入...");
+  console.log("🔥 开始分批注入 40 名乘客...");
   let successCount = 0;
+  const BATCH_SIZE = 12;      // 每批 12 个
+  const TOTAL = 40;
+  const ts = Date.now();
 
-  // 利用 Promise.all 瞬间并发 40 个请求
-  const requests = Array.from({ length: 40 }).map((_, index) => {
-    return axios.post('http://10.180.21.71:8000/api/dispatch/passenger_action', {
-      user_id: `mock_burst_${Date.now()}_${index}`,
-      route_key: 'line1_cw',
-      action: 'join',
-      station_id: '公共教学楼'
-    }).then(() => successCount++);
-  });
-
-  // 找到原来的这段代码：
-  try {
-    await Promise.all(requests);
-    alert(`🎯 注入完毕！成功发送 ${successCount} 名虚拟乘客。\n👉 现在请盯紧地图...`);
-  } catch (err) {
-    alert("部分请求失败，请检查后端网络！");
+  for (let i = 0; i < TOTAL; i += BATCH_SIZE) {
+    const batch = [];
+    for (let j = i; j < Math.min(i + BATCH_SIZE, TOTAL); j++) {
+      batch.push(
+        axios.post('/api/dispatch/passenger_action', {
+          user_id: `mock_burst_${ts}_${j}`,
+          route_key: 'line1_cw',
+          action: 'join',
+          station_id: '公共教学楼'
+        }).then(() => successCount++)
+        .catch(() => {})  // 单条失败不中断整批
+      );
+    }
+    await Promise.all(batch);
+    console.log(`  已注入 ${Math.min(i + BATCH_SIZE, TOTAL)}/${TOTAL}`);
   }
 
-// 🚀 替换为下面这段【不卡顿、不阻塞】的版本：
-  try {
-    await Promise.all(requests);
-    // 放弃使用阻塞的 alert，改用控制台打印 + 自动非阻塞弹窗
-    console.log(`🎯 注入完毕！成功发送 ${successCount} 名虚拟乘客。`);
-    
-    // 用原生 JS 在右上角悄悄浮现一个成功提示，3秒后自动消失，绝对不卡顿地图！
-    const toast = document.createElement('div');
-    toast.innerHTML = `🔥 成功注入 ${successCount} 名排队乘客！后端开始调度...`;
-    toast.style.cssText = "position:fixed; top:20px; right:20px; background:#ef4444; color:white; padding:15px 20px; border-radius:8px; z-index:9999; font-weight:bold; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); transition: opacity 0.5s;";
-    document.body.appendChild(toast);
-    setTimeout(() => {
-        toast.style.opacity = '0';
-        setTimeout(() => toast.remove(), 500);
-    }, 4000);
-
-  } catch (err) {
-    console.error("部分请求失败，请检查后端网络！", err);
-  }
+  console.log(`🎯 注入完毕！成功 ${successCount}/${TOTAL}`);
+  const toast = document.createElement('div');
+  toast.innerHTML = `🔥 成功注入 ${successCount} 名排队乘客！后端开始调度...`;
+  toast.style.cssText = "position:fixed; top:20px; right:20px; background:#ef4444; color:white; padding:15px 20px; border-radius:8px; z-index:9999; font-weight:bold; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); transition: opacity 0.5s;";
+  document.body.appendChild(toast);
+  setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 500); }, 4000);
 };
 
 const lineStats = ref({}); // 存储排队人数
@@ -230,7 +219,7 @@ const lineStats = ref({}); // 存储排队人数
 // 每 3 秒拉取一次排队情况
 const fetchLineStats = async () => {
   try {
-    const res = await axios.get('http://10.180.21.71:8000/api/dispatch/stats');
+    const res = await axios.get('/api/dispatch/stats');
     lineStats.value = res.data;
   } catch (err) {
     console.error("获取统计数据失败", err);

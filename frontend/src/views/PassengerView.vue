@@ -98,18 +98,23 @@ const cancelSelection = () => {
   selectedLine.value = '';
 };
 
-// 🚀 新增：专门去后端拿 ETA 数据的函数
+// 🚀 专门去后端拿 ETA 数据的函数
 const fetchETA = async () => {
   if (!selectedStation.value || !selectedLine.value) return;
-  
+
   try {
-    // 使用队友给的新接口和新 IP，拼上 route 参数过滤线路！
-    const url = `http://10.180.21.71:8000/api/eta/${selectedStation.value.nameCN}?route=${selectedLine.value}`;
+    // 把中文线路名转成后端需要的 route_key 格式（如 1号线 → line1_cw）
+    const routeKey = getRouteKey(selectedLine.value);
+    const url = `/api/eta/${encodeURIComponent(selectedStation.value.nameCN)}?route=${routeKey}`;
     const res = await axios.get(url);
-    
-    // 假设后端返回的数据里有时间字段（具体字段名根据你队友给的 JSON 调整，这里假设直接返回字符串或者 res.data.time）
-    // 如果返回的是纯文本或数字，你可以直接写 etaText.value = res.data + ' 分钟';
-    etaText.value = res.data; 
+    const data = res.data;
+
+    // 后端返回 { stationId, etaMinutes, busId, message? }
+    if (data.etaMinutes !== null && data.etaMinutes !== undefined) {
+      etaText.value = `约 ${data.etaMinutes} 分钟`;
+    } else {
+      etaText.value = data.message || '暂无可用车辆';
+    }
   } catch (error) {
     console.error('获取预计到达时间失败:', error);
     etaText.value = '获取失败';
@@ -119,10 +124,11 @@ const fetchETA = async () => {
 // 🚀 1. 在 <script setup> 顶部附近，给这个手机生成一个随机的用户 ID
 const currentUserId = ref('user_' + Math.random().toString(36).substring(2, 9));
 
-// 💡 辅助函数：把中文线路名转成后端可能需要的拼音/英文 key (如果后端直接认"1号线"可以不用这个)
+// 💡 辅助函数：把中文线路名转成后端需要的 route_key
 const getRouteKey = (lineName) => {
-  if (lineName.includes('1')) return 'line1_cw';
-  if (lineName.includes('2')) return 'line2_cw';
+  if (lineName.includes('1号') || lineName === '1号线') return 'line1_cw';
+  if (lineName.includes('2号') || lineName === '2号线') return 'line2_cw';
+  if (lineName.includes('教师')) return 'teacher_cw';
   return lineName;
 };
 
@@ -132,12 +138,12 @@ const getRouteKey = (lineName) => {
 const confirmWaiting = async () => {
   if (!selectedLine.value) return;
   isWaiting.value = true;
-  etaText.value = '计算中...'; 
-  
+  etaText.value = '计算中...';
+
   try {
-    await axios.post('http://10.180.21.71:8000/api/dispatch/passenger_action', {
+    await axios.post('/api/dispatch/passenger_action', {
       user_id: currentUserId.value,
-      route_key: getRouteKey(selectedLine.value), 
+      route_key: getRouteKey(selectedLine.value),
       action: 'join',
       station_id: selectedStation.value.nameCN
     });
@@ -146,8 +152,8 @@ const confirmWaiting = async () => {
     console.error('❌ 发送排队信息失败:', error);
   }
 
-  fetchETA(); 
-  etaTimer = setInterval(fetchETA, 3000); 
+  fetchETA();
+  etaTimer = setInterval(fetchETA, 3000);
 };
 
 // ==========================================
@@ -166,7 +172,7 @@ const cancelWaiting = async () => {
   // 后台悄悄发请求撤销
   if (stationName && lineName) {
     try {
-      await axios.post('http://10.180.21.71:8000/api/dispatch/passenger_action', {
+      await axios.post('/api/dispatch/passenger_action', {
         user_id: currentUserId.value,
         route_key: getRouteKey(lineName),
         action: 'leave',

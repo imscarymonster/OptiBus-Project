@@ -49,7 +49,15 @@ engine = create_engine(DATABASE_URL, echo=False, future=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-redis_pool = redis.ConnectionPool.from_url(REDIS_URL, decode_responses=True)
+redis_pool = redis.ConnectionPool.from_url(
+    REDIS_URL,
+    decode_responses=True,
+    socket_connect_timeout=10,
+    socket_timeout=15,
+    socket_keepalive=True,
+    retry_on_timeout=True,
+    max_connections=20,
+)
 redis_client = redis.Redis(connection_pool=redis_pool)
 
 

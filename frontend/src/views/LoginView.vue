@@ -56,6 +56,7 @@ const handleLogin = () => {
   } 
   else if (username.value === 'driver01' && password.value === '123456') {
     localStorage.setItem('driverToken', 'optibus-driver-token');
+    localStorage.setItem('driverId', 'driver01');
     router.push('/driver');
   } 
   else {

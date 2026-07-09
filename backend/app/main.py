@@ -35,6 +35,7 @@ STATIONS_XY: dict[str, tuple[float, float]] = {
     "黎安书院": (294, 620), "立德路站": (312, -334),
     "拐点1": (-147, -189), "拐点2": (-22, -353), "拐点3": (176, -178),
     "拐点5": (639, 731), "拐点6": (449, 857), "拐点7": (-116, 129),
+    "拐点8": (420, 120), "拐点9": (520, 450),
 }
 
 # ---------------------------------------------------------------------------
@@ -52,7 +53,8 @@ ROUTES_SEQUENCE: dict[str, list[str]] = {
         "中传专享楼", "拐点3", "生活二区2号门", "生活一区2号门",
         "拐点1", "会堂", "双创中心",
         "会堂", "拐点1", "拐点2", "生活一区食堂",
-        "拐点2", "拐点1", "拐点3", "中传专享楼",
+        "拐点2", "拐点1", "拐点3", "拐点8", "1号食堂", "自强路站",
+        "拐点8", "拐点3", "中传专享楼",
     ],
     "line1_ccw": [],
     "teacher_cw": [
@@ -91,6 +93,9 @@ BUS_FLEET: list[dict] = [
 ]
 
 ALL_ROUTE_KEYS = list(ROUTES_SEQUENCE.keys())
+
+# 仿真车 ID 集合（模块级，供调度引擎判断是否为仿真车）
+SIM_BUS_IDS = {b["busId"] for b in BUS_FLEET}
 
 # 仿真起始时间戳（lifespan 中赋值）
 _sim_t0: float | None = None
@@ -228,6 +233,12 @@ def get_simulated_segment_info(
 
     idx = (ticks // 2) % cycle_len
     next_idx = (idx + 1) % cycle_len
+
+    # 环形路线首尾衔接去重：当中传专享楼同时为路线首站和末站时，
+    # idx=末站 回绕 next_idx=首站(同站名) 会导致 from==to，车辆被过滤消失。
+    # 此处自动再推进一站，确保 fromStation != toStation。
+    if pure_route[idx] == pure_route[next_idx]:
+        next_idx = (next_idx + 1) % cycle_len
 
     if ticks % 2 == 0:
         # 偶数 tick：靠站
@@ -513,7 +524,8 @@ def _check_pending_dispatches():
             data.pop("transfer_station", None)
             data["status"] = "driving"
             data["dispatch_timestamp"] = time.time()
-            data["lap_state"] = "just_started"         # 一圈防抖：刚变线，尚未驶离枢纽
+            # 仿真车直接标记 running（无真实 GPS 驱动 _update_lap_state）
+            data["lap_state"] = "running" if bus_id in SIM_BUS_IDS else "just_started"
             redis_client.hset("bus:status:all", bus_id, json.dumps(data))
 
             # 原子基数同步（此时才做！）
@@ -573,9 +585,23 @@ def _execute_return(bus_id: str, data: dict):
 # ============================================================================
 
 def _evict_expired_passengers():
-    """扫描 dispatch:passengers Hash，静默清理超时用户。"""
+    """扫描 dispatch:passengers Hash，静默清理超时用户。
+
+    优化：真车位置和仿真状态只读取一次，缓存后复用，避免 N+1 Redis 查询。
+    """
     now = time.time()
     evicted = 0
+
+    # ---- 一次性缓存：真车位置 + 仿真状态 ----
+    real_positions = _get_real_bus_positions()
+    sim_elapsed = (time.time() - _sim_t0) * SIMULATION_SPEEDUP if _sim_t0 else 0.0
+    # 预计算所有仿真车位置
+    sim_positions: dict[str, tuple[float, float]] = {}
+    if _sim_t0:
+        for b in BUS_FLEET:
+            pos = get_simulated_position(b, sim_elapsed)
+            if pos:
+                sim_positions[b["busId"]] = (pos[0], pos[1], b["route_key"])
 
     all_passengers = redis_client.hgetall("dispatch:passengers")
     for user_id, raw in all_passengers.items():
@@ -595,18 +621,28 @@ def _evict_expired_passengers():
             redis_client.hdel("dispatch:passengers", user_id)
             continue
 
-        elapsed = now - join_time
+        user_elapsed = now - join_time
 
-        # 计算 ETA：取该线路上任意车辆到乘客站点的最小 ETA
-        eta_seconds = 0
-        if station_id and station_id in STATIONS_XY:
-            min_eta = _get_min_eta_for_station(route_key, station_id)
-            eta_seconds = max(0, min_eta) * 60
+        # 用缓存数据计算 ETA（不再逐次调 Redis）
+        best_eta = 999
+        tx, ty = STATIONS_XY.get(station_id, (0, 0))
+        for _bid, (lat, lng, rk, bdata) in real_positions.items():
+            if rk == route_key and not bdata.get("pending_return"):
+                eta = calculate_eta(lat, lng, route_key, station_id)
+                if eta is not None and eta < best_eta:
+                    best_eta = eta
+        if best_eta == 999:
+            for bid, (sx, sy, srk) in sim_positions.items():
+                if srk == route_key:
+                    eta = calculate_eta(sx, sy, route_key, station_id)
+                    if eta is not None and eta < best_eta:
+                        best_eta = eta
 
+        eta_seconds = max(0, (best_eta if best_eta != 999 else 0)) * 60
         circle_time = get_route_circle_time(route_key)
         retention = eta_seconds + circle_time
 
-        if elapsed >= retention:
+        if user_elapsed >= retention:
             redis_client.hdel("dispatch:passengers", user_id)
             redis_client.hincrby("route:user_count", route_key, -1)
             cnt = int(redis_client.hget("route:user_count", route_key) or 0)
@@ -692,9 +728,18 @@ def _check_all_return_conditions():
         if time.time() - data.get("dispatch_timestamp", 0) < 60:
             continue
 
-        # 必须回到枢纽站
-        if get_distance((lat, lng), hub_xy) >= STATION_THRESHOLD:
-            continue
+        # 仿真车用模拟位置判距，真车用 Redis GPS 坐标
+        if bus_id in SIM_BUS_IDS and _sim_t0 is not None:
+            elapsed = (time.time() - _sim_t0) * SIMULATION_SPEEDUP
+            sim_pos = get_simulated_position(
+                next((b for b in BUS_FLEET if b["busId"] == bus_id), None) or {},
+                elapsed)
+            if sim_pos is None or get_distance(sim_pos, hub_xy) >= STATION_THRESHOLD:
+                continue
+        else:
+            # 必须回到枢纽站
+            if get_distance((lat, lng), hub_xy) >= STATION_THRESHOLD:
+                continue
 
         # 执行归还 + 仿真校准
         _execute_return(bus_id, data)
@@ -721,12 +766,16 @@ def _update_lap_state():
 
 
 async def _scan_and_dispatch():
-    """单次调度扫描：清理 → 归还 → 到站变线(阶段B) → 驶离检测 → 打标记(阶段A)。"""
-    _evict_expired_passengers()
-    _check_all_return_conditions()
-    _check_pending_dispatches()
-    _update_lap_state()
-    _check_all_dispatch_conditions()
+    """单次调度扫描：清理 → 归还 → 到站变线(阶段B) → 驶离检测 → 打标记(阶段A)。
+
+    所有同步 Redis 操作通过 asyncio.to_thread 在线程池中执行，
+    避免阻塞 FastAPI 的 asyncio 事件循环。
+    """
+    await asyncio.to_thread(_evict_expired_passengers)
+    await asyncio.to_thread(_check_all_return_conditions)
+    await asyncio.to_thread(_check_pending_dispatches)
+    await asyncio.to_thread(_update_lap_state)
+    await asyncio.to_thread(_check_all_dispatch_conditions)
 
 
 async def dispatch_scanner():
@@ -883,6 +932,116 @@ async def driver_check_in(data: schemas.DriverDailyCheckIn):
     }
 
 
+# ============================================================================
+# GPS → 米制坐标转换（校园地图参考系）
+# ============================================================================
+
+# 校园参考点 GPS（海南陵水黎安国际教育创新试验区，需实地校准）
+GPS_REF_LAT = 18.4300
+GPS_REF_LNG = 110.0000
+METERS_PER_DEG_LAT = 111320.0
+METERS_PER_DEG_LNG = 105600.0  # cos(18.43°) × 111320
+
+
+def gps_to_meters(lat: float, lng: float) -> tuple[float, float]:
+    """将真实 GPS 经纬度转换为校园米制坐标 (x, y)。"""
+    x = (lng - GPS_REF_LNG) * METERS_PER_DEG_LNG
+    y = (lat - GPS_REF_LAT) * METERS_PER_DEG_LAT
+    return (x, y)
+
+
+def _route_key_to_route_id(route_key: str) -> int:
+    """从 route_key 反查数字 route_id（兼容 check_in 格式）。"""
+    for prefix, rid in [("line1", 1), ("line2", 2), ("teacher", 3)]:
+        if route_key.startswith(prefix):
+            return rid
+    return 0
+
+
+@app.post("/api/buses/location/update")
+async def bus_location_update(data: dict):
+    """接收司机手机 GPS 定位，转换为校园米制坐标后存入 Redis。
+
+    POST body:
+    {
+        "busId": "driver01",
+        "lat": 18.4305,       // 浏览器 GPS 纬度
+        "lng": 110.0020,      // 浏览器 GPS 经度
+        "status": "driving",
+        "routeKey": "line2_cw" // 可选：司机所在线路
+    }
+    """
+    bus_id = str(data.get("busId", ""))
+    if not bus_id:
+        return {"status": "error", "message": "缺少 busId"}
+
+    gps_lat = float(data.get("lat", 0))
+    gps_lng = float(data.get("lng", 0))
+
+    # GPS → 米制坐标
+    meter_x, meter_y = gps_to_meters(gps_lat, gps_lng)
+
+    # 校验 GPS 是否在校园附近（±0.05° ≈ 5km），桌面浏览器定位不准时 fallback
+    gps_near_campus = (
+        abs(gps_lat - GPS_REF_LAT) < 0.05 and
+        abs(gps_lng - GPS_REF_LNG) < 0.05 and
+        gps_lat != 0 and gps_lng != 0
+    )
+
+    # 读取已有状态，或为新车上线初始化
+    raw = redis_client.hget("bus:status:all", bus_id)
+    if raw:
+        try:
+            status_data = json.loads(raw)
+        except json.JSONDecodeError:
+            status_data = {}
+    else:
+        status_data = {}
+        # 新车上线：确定路线
+        route_key = data.get("routeKey", "")
+        if not route_key or route_key not in ROUTES_SEQUENCE:
+            # 自动匹配：GPS 米制坐标最近的路线
+            best_rk, best_d = None, float("inf")
+            for rk in ALL_ROUTE_KEYS:
+                _, d, _ = snap_vehicle(meter_x, meter_y, rk)
+                if d < best_d:
+                    best_d = d
+                    best_rk = rk
+            route_key = best_rk or "line1_cw"
+        status_data["route_key"] = route_key
+        status_data["route_id"] = _route_key_to_route_id(route_key)
+        status_data["source"] = "gps"
+        # 线路车辆计数 +1
+        redis_client.hincrby("route:bus_count", route_key, 1)
+
+    if gps_near_campus:
+        status_data["lat"] = meter_x
+        status_data["lng"] = meter_y
+    else:
+        # GPS 偏离校园太远（桌面浏览器 / IP 定位不准）：保持上次有效位置
+        # 若无历史位置，则放到路线首站
+        if status_data.get("lat") in (None, 0.0) and status_data.get("lng") in (None, 0.0):
+            route_key = status_data.get("route_key", "line1_cw")
+            if route_key in ROUTES_SEQUENCE:
+                first_station = ROUTES_SEQUENCE[route_key][0]
+                sx, sy = STATIONS_XY[first_station]
+                status_data["lat"] = sx
+                status_data["lng"] = sy
+        # 否则保持上次的 lat/lng 不变
+
+    status_data["status"] = data.get("status", "driving")
+
+    redis_client.hset("bus:status:all", bus_id, json.dumps(status_data))
+
+    return {
+        "status": "ok",
+        "busId": bus_id,
+        "gps": {"lat": gps_lat, "lng": gps_lng},
+        "meter": {"x": round(status_data["lat"], 1), "y": round(status_data["lng"], 1)},
+        "nearCampus": gps_near_campus,
+    }
+
+
 # ==================== 调度引擎 — 乘客生命周期接口 ====================
 
 @app.post("/api/dispatch/passenger_action")
@@ -972,6 +1131,9 @@ async def get_bus_locations():
     except Exception:
         all_buses = {}
     for driver_id, raw_json in all_buses.items():
+        # 仿真车由发车模拟器提供位置，跳过调度引擎写入的 Redis 空坐标
+        if driver_id in SIM_BUS_IDS:
+            continue
         try:
             data = json.loads(raw_json)
         except (json.JSONDecodeError, TypeError):
@@ -1024,6 +1186,7 @@ async def get_bus_locations():
         result.append({
             "busId": driver_id,
             "line": display_name,
+            "routeKey": rk,
             "fromStation": from_station,
             "toStation": to_station,
             "progress": progress,
@@ -1046,6 +1209,7 @@ async def get_bus_locations():
             result.append({
                 "busId": bus["busId"],
                 "line": display_name,
+                "routeKey": bus["route_key"],
                 "fromStation": from_station,
                 "toStation": to_station,
                 "progress": progress,
@@ -1088,6 +1252,8 @@ async def get_eta(station_id: str, route: str | None = None):
     except Exception:
         all_buses = {}
     for driver_id, raw_json in all_buses.items():
+        if driver_id in SIM_BUS_IDS:
+            continue  # 仿真车由模拟器提供位置
         try:
             data = json.loads(raw_json)
         except (json.JSONDecodeError, TypeError):
@@ -1129,6 +1295,32 @@ async def get_eta(station_id: str, route: str | None = None):
                 continue
             eta = calculate_eta(pos[0], pos[1], bus["route_key"], station_id)
             if eta is not None and eta < best_eta:
+                best_eta = eta
+                best_bus_id = bus["busId"]
+
+        # 兜底：若指定 route 但站点不在该线路上（前端/后端数据不一致），
+        # 则回退到全网所有线路搜索，避免"暂无可用车辆"
+        if best_bus_id is None and route:
+            for bus in BUS_FLEET:
+                pos = get_simulated_position(bus, elapsed)
+                if pos is None:
+                    continue
+                eta = calculate_eta(pos[0], pos[1], bus["route_key"], station_id)
+                if eta is not None and eta < best_eta:
+                    best_eta = eta
+                    best_bus_id = bus["busId"]
+
+    # 最终兜底：孤站（不在任何路线上）用直线距离估算
+    if best_bus_id is None and _sim_t0 is not None:
+        elapsed = (time.time() - _sim_t0) * SIMULATION_SPEEDUP
+        tx, ty = STATIONS_XY[station_id]
+        for bus in BUS_FLEET:
+            pos = get_simulated_position(bus, elapsed)
+            if pos is None:
+                continue
+            d = get_distance(pos, (tx, ty))
+            eta = math.ceil(d / BUS_SPEED / 60)
+            if eta < best_eta:
                 best_eta = eta
                 best_bus_id = bus["busId"]
 

@@ -61,25 +61,27 @@
         </text>
       </g>
       
-<g v-if="showBuses" v-for="bus in activeBuses" :key="bus.busId" class="transition-all duration-1000 ease-linear"></g>
-      <circle 
-        :cx="getBusX(bus)" 
-        :cy="getBusY(bus)" 
-        r="12" 
-        fill="#ffffff" 
-        stroke="#3b82f6" 
-        stroke-width="4" 
-        class="shadow-lg"
-      />
-      <text 
-        :x="getBusX(bus)" 
-        :y="getBusY(bus) - 18" 
-        text-anchor="middle" 
-        class="text-[10px] font-bold fill-blue-800"
-      >
-        {{ bus.busId }}
-      </text>
-    </g>
+<template v-if="showBuses">
+      <g v-for="bus in activeBuses" :key="bus.busId" class="transition-all duration-1000 ease-linear">
+        <circle
+          :cx="getBusX(bus)"
+          :cy="getBusY(bus)"
+          r="12"
+          fill="#ffffff"
+          stroke="#3b82f6"
+          stroke-width="4"
+          class="shadow-lg"
+        />
+        <text
+          :x="getBusX(bus)"
+          :y="getBusY(bus) - 18"
+          text-anchor="middle"
+          class="text-[10px] font-bold fill-blue-800"
+        >
+          {{ bus.busId }}
+        </text>
+      </g>
+    </template>
     </svg><div class="absolute bottom-6 right-6 bg-white/90 backdrop-blur-sm p-4 rounded-xl shadow-lg border border-gray-200 flex gap-6 text-xs font-bold text-gray-700 pointer-events-none z-20">
       <div class="flex items-center gap-2"><div class="w-8 h-2 bg-[#102c4c] rounded-full"></div>1号线</div>
       <div class="flex items-center gap-2"><div class="w-8 h-2 bg-[#7ab829] rounded-full"></div>2号线</div>
@@ -250,7 +252,7 @@ let radarInterval = null;    // 雷达定时器
 // 找到你原本获取小车数据的那个函数（比如 fetchBusLocations），在拿到数据后加上这一句：
 const fetchBusLocations = async () => {
   try {
-    const res = await axios.get('http://10.180.21.71:8000/api/buses/locations');
+    const res = await axios.get('/api/buses/locations');
     activeBuses.value = res.data.buses;
     
     // 🚀 核心新增：把当前数组的长度（有几辆车）发射给外面的父组件！
@@ -274,103 +276,237 @@ onUnmounted(() => {
 
 
 // ==========================================
-// 💡 拓扑状态解耦：根据前后站点和进度，计算真实屏幕坐标
+// 💡 SVG 原生路径定义 — 每条线路的完整行驶轨迹（匹配 SVG 实际绘制线条）
 // ==========================================
 
+// line1 完整 SVG 路径（顺向，匹配后端 line1_cw 的 ROUTES_SEQUENCE）
+// 路径沿着 SVG 实际绘制的蓝色线条行进
+const LINE1_SVG_PATH = [
+  { name: '中传专享楼',     x: 350, y: 300 },  // 0
+  { name: null,             x: 350, y: 315 },  // 1  下行到分支线
+  { name: null,             x: 358, y: 315 },  // 2  沿分支右行
+  { name: null,             x: 358, y: 500 },  // 3  下行到主线(立德路站凹陷东侧)
+  { name: '生活二区2号门',   x: 420, y: 500 },  // 4
+  { name: '生活一区2号门',   x: 305, y: 500 },  // 5  向左折返
+  { name: '会堂',           x: 260, y: 500 },  // 6
+  { name: '双创中心',       x: 100, y: 500 },  // 7
+  { name: '会堂',           x: 260, y: 500 },  // 8  折返
+  { name: null,             x: 260, y: 560 },  // 9  沿垂直线下行
+  { name: '生活一区食堂',   x: 260, y: 620 },  // 10
+  { name: null,             x: 260, y: 560 },  // 11 上行
+  { name: null,             x: 260, y: 500 },  // 12 回到主线
+  { name: null,             x: 338, y: 500 },  // 13 沿主线右行
+  { name: null,             x: 342, y: 508 },  // 14 凹陷曲线
+  { name: null,             x: 342, y: 620 },  // 15 凹陷底部(立德路站)
+  { name: null,             x: 358, y: 620 },  // 16 凹陷底部东侧
+  { name: null,             x: 358, y: 508 },  // 17 凹陷曲线上行
+  { name: null,             x: 362, y: 500 },  // 18 回到主线
+  { name: '1号食堂',        x: 840, y: 500 },  // 19
+  { name: null,             x: 840, y: 400 },  // 20 沿垂直线段上行
+  { name: null,             x: 840, y: 315 },  // 21 到达分支线(北体)
+  { name: null,             x: 980, y: 315 },  // 22 沿分支右行
+  { name: null,             x: 1000, y: 335 }, // 23 曲线
+  { name: '自强路站',       x: 1000, y: 500 }, // 24
+  // ---- 折返 ----
+  { name: null,             x: 1000, y: 335 }, // 25
+  { name: null,             x: 980, y: 315 },  // 26
+  { name: null,             x: 840, y: 315 },  // 27
+  { name: null,             x: 840, y: 400 },  // 28
+  { name: null,             x: 840, y: 500 },  // 29
+  { name: null,             x: 362, y: 500 },  // 30
+  { name: null,             x: 358, y: 508 },  // 31
+  { name: null,             x: 358, y: 620 },  // 32
+  { name: null,             x: 342, y: 620 },  // 33
+  { name: null,             x: 342, y: 508 },  // 34
+  { name: null,             x: 338, y: 500 },  // 35
+  { name: null,             x: 350, y: 620 },  // 36 凹陷底部中点(沿教师线走廊上行)
+  { name: null,             x: 350, y: 320 },  // 37 沿教师线走廊
+  { name: '中传专享楼',     x: 350, y: 300 },  // 38
+];
+
+// line1 逆向路径就是顺向的反转
+const LINE1_CCW_SVG_PATH = [...LINE1_SVG_PATH].reverse();
+
+// line2 完整 SVG 路径（顺向，匹配后端 line2_cw 的 ROUTES_SEQUENCE）
+// 绿线从枢纽出发：上行→左拐至北邮→折返→沿绿线右行→右下曲线→底边左行回枢纽
+const LINE2_SVG_PATH = [
+  { name: '中传专享楼',          x: 350, y: 300 }, // 0
+  { name: null,                  x: 350, y: 265 }, // 1  上到绿线底部拐角
+  { name: null,                  x: 350, y: 100 }, // 2  绿线左竖条顶部
+  { name: '体育场',              x: 350, y: 100 }, // 3  出发向左
+  { name: '电科专享楼',          x: 200, y: 100 }, // 4
+  { name: '北邮专享楼',          x: 100, y: 100 }, // 5  左端尽头
+  // ---- 折返 ----
+  { name: '电科专享楼',          x: 200, y: 100 }, // 6  折返右行
+  { name: '体育场',              x: 350, y: 100 }, // 7
+  { name: '图书馆',              x: 540, y: 100 }, // 8  继续右行
+  { name: '民大专享楼',          x: 720, y: 100 }, // 9
+  { name: '黎安书院',            x: 1000, y: 100 }, // 10
+  // ---- 右下曲线 ----
+  { name: null,                  x: 1000, y: 120 }, // 11
+  { name: null,                  x: 1000, y: 265 }, // 12
+  // ---- 底边左行（绿线 Y≈285，站点标记在 Y=300） ----
+  { name: '大学生活动中心',      x: 1000, y: 285 }, // 13
+  { name: '综合体育中心游泳馆',  x: 920, y: 285 },  // 14
+  { name: '北体专享楼',          x: 840, y: 285 },  // 15
+  { name: '公共实验楼',          x: 720, y: 285 },  // 16
+  { name: '公共教学楼',          x: 540, y: 285 },  // 17
+  { name: null,                  x: 370, y: 285 },  // 18
+  { name: null,                  x: 350, y: 265 },  // 19 绿线底部拐角
+  { name: '中传专享楼',          x: 350, y: 300 },  // 20 回到枢纽
+];
+const LINE2_CCW_SVG_PATH = [...LINE2_SVG_PATH].reverse();
+
+// 教师专线 SVG 路径（匹配后端 teacher_cw）
+// 红线：枢纽↔公共教学楼/公共实验楼（右上），枢纽↔立德路站（南下）
+const TEACHER_SVG_PATH = [
+  { name: '中传专享楼',   x: 350, y: 300 },
+  { name: null,           x: 350, y: 320 },  // 下行接入红线
+  { name: null,           x: 370, y: 300 },  // 沿红线曲线右行
+  { name: '公共教学楼',   x: 540, y: 300 },
+  { name: '公共实验楼',   x: 720, y: 300 },
+  // ---- 折返 ----
+  { name: '公共教学楼',   x: 540, y: 300 },
+  { name: null,           x: 370, y: 300 },
+  { name: null,           x: 350, y: 320 },
+  { name: '中传专享楼',   x: 350, y: 300 },
+  // ---- 立德路站支线 ----
+  { name: null,           x: 350, y: 320 },
+  { name: null,           x: 350, y: 620 },
+  { name: '立德路站',     x: 350, y: 620 },
+  // ---- 返回枢纽 ----
+  { name: null,           x: 350, y: 320 },
+  { name: null,           x: 350, y: 300 },
+  { name: '中传专享楼',   x: 350, y: 300 },
+];
+const TEACHER_CCW_SVG_PATH = [...TEACHER_SVG_PATH].reverse();
+
+const ROUTE_SVG_PATHS = {
+  'line1_cw': LINE1_SVG_PATH,
+  'line1_ccw': LINE1_CCW_SVG_PATH,
+  'line2_cw': LINE2_SVG_PATH,
+  'line2_ccw': LINE2_CCW_SVG_PATH,
+  'teacher_cw': TEACHER_SVG_PATH,
+  'teacher_ccw': TEACHER_CCW_SVG_PATH,
+};
+
 // ==========================================
-// 💡 终极拓扑渲染引擎 (带智能轨道偏移)
+// 💡 沿 SVG 原生路径插值 — 消除"走空白"
 // ==========================================
 
-// 1. 获取站点真实坐标
+// 预计算 SVG 路径的累计距离（缓存）
+const _pathDistanceCache = {};
+
+function _buildPathCache(path) {
+  const dists = [0];
+  for (let i = 1; i < path.length; i++) {
+    const dx = path[i].x - path[i-1].x;
+    const dy = path[i].y - path[i-1].y;
+    dists.push(dists[i-1] + Math.sqrt(dx*dx + dy*dy));
+  }
+  return { path, dists, totalLen: dists[dists.length - 1] };
+}
+
+function _getPathCache(routeKey) {
+  if (!_pathDistanceCache[routeKey]) {
+    const path = ROUTE_SVG_PATHS[routeKey];
+    if (path) _pathDistanceCache[routeKey] = _buildPathCache(path);
+  }
+  return _pathDistanceCache[routeKey];
+}
+
+function _findStationIndices(path, stationName) {
+  const indices = [];
+  for (let i = 0; i < path.length; i++) {
+    if (path[i].name === stationName) indices.push(i);
+  }
+  return indices;
+}
+
+/**
+ * 在 SVG 路径上，找到从 fromStation 到 toStation 之间进度为 progress 的精确坐标。
+ * 如果找不到路径，fallback 到简单直线插值。
+ */
+function _interpolateOnSvgPath(routeKey, fromStation, toStation, progress) {
+  const cache = _getPathCache(routeKey);
+  if (!cache) return null;
+
+  const { path, dists, totalLen } = cache;
+
+  // 找到 from 和 to 在路径中的位置
+  const fromIndices = _findStationIndices(path, fromStation);
+  const toIndices = _findStationIndices(path, toStation);
+
+  if (fromIndices.length === 0 || toIndices.length === 0) return null;
+
+  // 找到 from → to 的最近配对（沿着路径前进方向）
+  let bestFromIdx = -1, bestToIdx = -1, bestDist = Infinity;
+  for (const fi of fromIndices) {
+    for (const ti of toIndices) {
+      if (ti <= fi) continue; // to 必须在 from 之后
+      const segDist = dists[ti] - dists[fi];
+      if (segDist > 0 && segDist < bestDist) {
+        bestDist = segDist;
+        bestFromIdx = fi;
+        bestToIdx = ti;
+      }
+    }
+  }
+
+  if (bestFromIdx < 0 || bestToIdx < 0) return null;
+
+  const segStartDist = dists[bestFromIdx];
+  const segLen = dists[bestToIdx] - segStartDist;
+  if (segLen <= 0) return { x: path[bestFromIdx].x, y: path[bestFromIdx].y };
+
+  const targetDist = segStartDist + segLen * progress;
+
+  // 沿着路径二分查找目标距离对应的坐标
+  for (let i = bestFromIdx; i < bestToIdx; i++) {
+    if (targetDist >= dists[i] && targetDist <= dists[i+1]) {
+      const t = (targetDist - dists[i]) / (dists[i+1] - dists[i] || 1);
+      return {
+        x: path[i].x + (path[i+1].x - path[i].x) * t,
+        y: path[i].y + (path[i+1].y - path[i].y) * t,
+      };
+    }
+  }
+
+  return { x: path[bestToIdx].x, y: path[bestToIdx].y };
+}
+
+// 获取站点 SVG 坐标（用于 fallback）
 const getStationCoords = (stationName) => {
   const station = stations.value.find(s => s.nameCN === stationName);
-  if (!station) {
-    console.warn(`🚨 警告：后端传了未知站点 [${stationName}]，小车可能会乱飞！`);
-    return { x: 0, y: 0 };
-  }
+  if (!station) return { x: 0, y: 0 };
   return { x: station.x, y: station.y };
 };
 
-// 💡 终极物理引擎：智能坐标系 + 防穿模闪现
+// 💡 统一入口：优先使用 SVG 路径插值，fallback 到简单直线
 const getBusPosition = (bus) => {
-  const from = getStationCoords(bus.fromStation);
-  const to = (bus.status === 'arrived' || !bus.toStation) ? from : getStationCoords(bus.toStation);
+  const routeKey = bus.routeKey || '';
+  const fromStation = (bus.fromStation || '').trim();
+  const toStation = (bus.toStation || '').trim();
   const progress = bus.progress ?? 0.5;
 
-  // 1. 获取起点的真实发车坐标
-  let startX = from.x, startY = from.y;
-  const fromData = stations.value.find(s => s.nameCN === bus.fromStation);
-  if (fromData?.isTransfer) {
-    if (fromData.isHorizontal) {
-       if (bus.line === '1号线' || bus.line === '1') startX -= 12;
-       if (bus.line === '教师专线') startX += 12;
-    } else {
-       if (bus.line === '1号线' || bus.line === '1') startY += 12;
-       if (bus.line === '2号线' || bus.line === '2') startY -= 12;
-    }
+  // 已到站：停在起点站位置
+  if (bus.status === 'arrived' || !toStation || fromStation === toStation) {
+    return getStationCoords(fromStation);
   }
 
-  if (bus.status === 'arrived' || !bus.toStation) return { x: startX, y: startY };
-
-  // 2. 获取终点的真实到达坐标
-  let endX = to.x, endY = to.y;
-  const toData = stations.value.find(s => s.nameCN === bus.toStation);
-  if (toData?.isTransfer) {
-    if (toData.isHorizontal) {
-       if (bus.line === '1号线' || bus.line === '1') endX -= 12;
-       if (bus.line === '教师专线') endX += 12;
-    } else {
-       if (bus.line === '1号线' || bus.line === '1') endY += 12;
-       if (bus.line === '2号线' || bus.line === '2') endY -= 12;
-    }
+  // 优先尝试 SVG 路径插值
+  if (routeKey && ROUTE_SVG_PATHS[routeKey]) {
+    const result = _interpolateOnSvgPath(routeKey, fromStation, toStation, progress);
+    if (result) return result;
   }
 
-  // 3. 直线检测：如果在同一条横线或竖线上，完美平滑移动
-  const dx = Math.abs(endX - startX);
-  const dy = Math.abs(endY - startY);
-  if (dx < 15 || dy < 15) {
-      return { x: startX + (endX - startX) * progress, y: startY + (endY - startY) * progress };
-  }
-
-  // 4. 合法 L 型弯道过弯处理 (去除后端可能带来的空格)
-  const fName = (bus.fromStation || '').trim();
-  const tName = (bus.toStation || '').trim();
-  const pair = [fName, tName].sort().join('-');
-  
-  let cornerX = null, cornerY = null;
-  if (pair === '中传专享楼-会堂') {
-     cornerX = 260; 
-     cornerY = fName === '中传专享楼' ? startY : endY; 
-  } else if (pair === '立德路站-生活一区2号门') {
-     cornerX = 342; cornerY = 500;
-  } else if (pair === '立德路站-生活二区2号门') {
-     cornerX = 358; cornerY = 500;
-  } else if (pair === '中传专享楼-生活一区食堂') {
-     cornerX = 260;
-     cornerY = fName === '中传专享楼' ? startY : endY;
-  }
-
-  if (cornerX !== null && cornerY !== null) {
-     const dist1 = Math.abs(cornerX - startX) + Math.abs(cornerY - startY);
-     const dist2 = Math.abs(endX - cornerX) + Math.abs(endY - cornerY);
-     const p1 = dist1 / (dist1 + dist2 || 1); 
-     if (progress <= p1) {
-        const subP = progress / p1;
-        return { x: startX + (cornerX - startX) * subP, y: startY + (cornerY - startY) * subP };
-     } else {
-        const subP = (progress - p1) / (1 - p1);
-        return { x: cornerX + (endX - cornerX) * subP, y: cornerY + (endY - cornerY) * subP };
-     }
-  }
-
-  // 5. 🚨 终极防穿模机制 (就是你提的思路！)
-  // 如果后端发来了地图上不存在连线的两个站（未知对角线），直接拒绝越野！
-  // 进度 < 0.6 时乖乖待在起点，> 0.6 时直接“闪现”到终点！
-  if (progress < 0.6) {
-      return { x: startX, y: startY };
-  } else {
-      return { x: endX, y: endY };
-  }
+  // Fallback: 简单直线插值
+  const from = getStationCoords(fromStation);
+  const to = getStationCoords(toStation);
+  return {
+    x: from.x + (to.x - from.x) * progress,
+    y: from.y + (to.y - from.y) * progress,
+  };
 };
 
 // 完美桥接给 HTML
