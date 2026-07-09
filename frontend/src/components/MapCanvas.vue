@@ -61,7 +61,7 @@
         </text>
       </g>
       
-<g v-for="bus in activeBuses" :key="bus.busId" class="transition-all duration-1000 ease-linear">
+<g v-if="showBuses" v-for="bus in activeBuses" :key="bus.busId" class="transition-all duration-1000 ease-linear"></g>
       <circle 
         :cx="getBusX(bus)" 
         :cy="getBusY(bus)" 
@@ -98,15 +98,22 @@
 </template>
 
 <script setup>
-// 声明我们要向外发射一个叫 stationClick 的事件
-const emit = defineEmits(['stationClick', 'updateBusCount']);
-
-defineProps({
+// 1. 合并所有的 Props（开关都在这里）
+const props = defineProps({
+  showBuses: {
+    type: Boolean,
+    default: true // 默认显示小蓝圈
+  },
   isAdmin: {
     type: Boolean,
     default: false
   }
 });
+
+// 2. 声明向外发射的事件
+const emit = defineEmits(['stationClick', 'updateBusCount']);
+
+// 3. 引入 Vue 和工具
 import { ref, onMounted, onUnmounted } from 'vue';
 import axios from 'axios';
 
