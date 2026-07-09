@@ -100,6 +100,13 @@
       </div>
 
       <div v-if="activeTab === 'warning'" class="animate-fade-in space-y-6">
+        <div class="mt-4 p-4 bg-gray-50 rounded-lg">
+          <h4 class="font-bold text-gray-700 mb-2">当前各线路排队情况：</h4>
+          <div class="flex gap-4">
+            <div class="text-sm">1号线: <span class="text-red-600 font-bold">{{ lineStats['line1_cw'] || 0 }} 人</span></div>
+            <div class="text-sm">2号线: <span class="text-green-600 font-bold">{{ lineStats['line2_cw'] || 0 }} 人</span></div>
+          </div>
+        </div>
         <div class="bg-red-50 p-6 rounded-2xl border border-red-200 flex justify-between items-center shadow-sm">
           <div>
             <h3 class="text-xl font-black text-red-600 mb-2 flex items-center gap-2"><span>🚨</span> 紧急情况：1号线运力告急！</h3>
@@ -133,7 +140,8 @@
 </template>
 
 <script setup>
-import { ref } from 'vue';
+import axios from 'axios';
+import { ref, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import MapCanvas from '../components/MapCanvas.vue';
 
@@ -169,7 +177,6 @@ const handleBusCountUpdate = (count) => {
   currentBusCount.value = count;
 };
 
-import axios from 'axios'; // 确保上面引入了 axios
 
 // 🚀 终极测试：一键触发柔性调度大招
 const simulateMassiveCrowd = async () => {
@@ -217,6 +224,24 @@ const simulateMassiveCrowd = async () => {
     console.error("部分请求失败，请检查后端网络！", err);
   }
 };
+
+const lineStats = ref({}); // 存储排队人数
+
+// 每 3 秒拉取一次排队情况
+const fetchLineStats = async () => {
+  try {
+    const res = await axios.get('http://10.180.21.71:8000/api/dispatch/stats');
+    lineStats.value = res.data;
+  } catch (err) {
+    console.error("获取统计数据失败", err);
+  }
+};
+
+// 在 onMounted 里加上它
+onMounted(() => {
+  // ...你原有的代码...
+  setInterval(fetchLineStats, 3000); // 开启排队人数监控
+});
 
 </script>
 
