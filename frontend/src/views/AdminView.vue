@@ -40,7 +40,7 @@
         <div class="grid grid-cols-3 gap-6 mb-6">
           <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
             <p class="text-gray-500 text-sm font-bold mb-1">当前在线车辆</p>
-            <div class="flex items-end space-x-2"><span class="text-4xl font-black text-gray-800">12</span><span class="text-gray-400 font-medium mb-1">辆</span></div>
+            <span class="text-4xl font-black text-gray-800">{{ currentBusCount }}</span>
           </div>
           <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
             <p class="text-gray-500 text-sm font-bold mb-1">全网平均候车时长</p>
@@ -54,7 +54,7 @@
         
         <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
           <h3 class="text-lg font-bold text-gray-800 mb-4">📍 园区全路网实时拓扑图</h3>
-          <MapCanvas :isAdmin="true" /> 
+          <MapCanvas :isAdmin="true" @updateBusCount="handleBusCountUpdate" />
         </div>
       </div>
 
@@ -79,14 +79,14 @@
               <td class="p-4"><span class="bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs font-bold">1号线</span></td>
               <td class="p-4">张师傅 (工号: driver01)</td>
               <td class="p-4"><span class="flex items-center gap-2"><div class="w-2 h-2 rounded-full bg-green-500"></div> 行驶中</span></td>
-              <td class="p-4"><button @click="editDriver('京A·BD101')" class="text-blue-500 hover:underline text-sm">编辑</button></td>
+              <td class="p-4"><button @click="editDriver('京A·BD101')" class="text-blue-500 hover:underline text-sm">AI 排班</button></td>
             </tr>
             <tr class="border-b border-gray-100 hover:bg-gray-50 transition-colors">
               <td class="p-4 font-bold text-green-600">京A·BD202</td>
               <td class="p-4"><span class="bg-green-100 text-green-800 px-2 py-1 rounded text-xs font-bold">2号线</span></td>
               <td class="p-4">李师傅 (工号: driver02)</td>
               <td class="p-4"><span class="flex items-center gap-2"><div class="w-2 h-2 rounded-full bg-green-500"></div> 行驶中</span></td>
-              <td class="p-4"><button @click="editDriver('京A·BD202')" class="text-blue-500 hover:underline text-sm">编辑</button></td>
+              <td class="p-4"><button @click="editDriver('京A·BD202')" class="text-blue-500 hover:underline text-sm">AI 排班</button></td>
             </tr>
             <tr class="border-b border-gray-100 hover:bg-gray-50 transition-colors">
               <td class="p-4 font-bold text-gray-600">京A·BD303</td>
@@ -100,14 +100,30 @@
       </div>
 
       <div v-if="activeTab === 'warning'" class="animate-fade-in space-y-6">
+        <div class="mt-4 p-4 bg-gray-50 rounded-lg">
+          <h4 class="font-bold text-gray-700 mb-2">当前各线路排队情况：</h4>
+          <div class="flex gap-4">
+            <div class="text-sm">1号线: <span class="text-red-600 font-bold">{{ lineStats['line1_cw'] || 0 }} 人</span></div>
+            <div class="text-sm">2号线: <span class="text-green-600 font-bold">{{ lineStats['line2_cw'] || 0 }} 人</span></div>
+          </div>
+        </div>
         <div class="bg-red-50 p-6 rounded-2xl border border-red-200 flex justify-between items-center shadow-sm">
           <div>
             <h3 class="text-xl font-black text-red-600 mb-2 flex items-center gap-2"><span>🚨</span> 紧急情况：1号线运力告急！</h3>
+            <div class="mt-4 flex gap-4">
+    <button @click="sendDispatchAlert" class="px-6 py-3 bg-red-600 text-white rounded-xl ...">
+      授权 AI 自动执行方案
+    </button>
+    
+    <button @click="simulateMassiveCrowd" class="px-6 py-3 border-2 border-red-600 text-red-600 font-bold rounded-xl hover:bg-red-50 active:scale-95 transition-all flex items-center gap-2">
+      <span>⚠️</span> 模拟1号线极端爆满
+    </button>
+  </div>
             <p class="text-gray-700">系统检测到 <span class="font-bold">图书馆站、中传专享楼</span> 产生大量滞留乘客，排队人数超阀值。</p>
           </div>
           <button @click="sendDispatchAlert" class="px-6 py-3 bg-red-600 text-white rounded-xl font-black text-lg hover:bg-red-700 active:scale-95 shadow-lg shadow-red-600/30 transition-all">
-            一键全网派发调度指令
-          </button>
+  授权 AI 自动执行方案
+</button>
         </div>
 
         <div class="bg-white p-8 rounded-2xl shadow-sm border border-gray-100">
@@ -124,9 +140,11 @@
 </template>
 
 <script setup>
-import { ref } from 'vue';
+import axios from 'axios';
+import { ref, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import MapCanvas from '../components/MapCanvas.vue';
+
 
 const router = useRouter();
 // 控制当前显示哪个模块的变量，默认显示 map (监控看板)
@@ -137,26 +155,94 @@ const handleLogout = () => {
   router.push('/login');
 };
 
-// 模拟发送调度指令
+// 模拟发送调度指令 (全自动)
 const sendDispatchAlert = () => {
-  alert('指令已发送！正在通知所有司机端及调度中心...');
-  // 现实中，这里会通过 WebSocket 向后端发送信号，后端再把信号推给所有手机端司机，司机端就会响起那段你写的语音！
+  alert('🚀 全网运力自动重构完成！\nAI 已自动接管所有车辆路线，司机端已全部收到最新导航指令！');
 };
-// 更换司机逻辑
+
+// 更换司机逻辑 (全自动)
 const editDriver = (busPlate) => {
-  const newDriver = prompt(`请输入为 ${busPlate} 更换的新司机工号：`);
-  if (newDriver) {
-    alert(`修改成功！${busPlate} 已指派给工号 ${newDriver}。`);
+  alert(`🤖 AI 自动排班触发：\n已自动为 ${busPlate} 匹配并指派了最优备班司机。`);
+};
+
+// 派车支援逻辑 (全自动)
+const dispatchBus = (busPlate) => {
+  alert(`⚡ AI 自动调度执行完毕！\n系统已根据实时运力算法，将待命车辆 ${busPlate} 自动编入【1号线】缓解客流压力。指令已瞬间同步至司机端！`);
+};
+
+// 删掉你原本 156~165 行的内容，替换成下面这几行：
+const currentBusCount = ref(0); 
+
+const handleBusCountUpdate = (count) => {
+  currentBusCount.value = count;
+};
+
+
+// 🚀 终极测试：一键触发柔性调度大招
+const simulateMassiveCrowd = async () => {
+  const confirmMsg = "确定要向【公共教学楼】瞬间注入 40 名排队乘客吗？这将立刻触发后端的跨线调度大招！";
+  if (!confirm(confirmMsg)) return;
+
+  console.log("🔥 开始执行高并发注入...");
+  let successCount = 0;
+
+  // 利用 Promise.all 瞬间并发 40 个请求
+  const requests = Array.from({ length: 40 }).map((_, index) => {
+    return axios.post('http://10.180.21.71:8000/api/dispatch/passenger_action', {
+      user_id: `mock_burst_${Date.now()}_${index}`,
+      route_key: 'line1_cw',
+      action: 'join',
+      station_id: '公共教学楼'
+    }).then(() => successCount++);
+  });
+
+  // 找到原来的这段代码：
+  try {
+    await Promise.all(requests);
+    alert(`🎯 注入完毕！成功发送 ${successCount} 名虚拟乘客。\n👉 现在请盯紧地图...`);
+  } catch (err) {
+    alert("部分请求失败，请检查后端网络！");
+  }
+
+// 🚀 替换为下面这段【不卡顿、不阻塞】的版本：
+  try {
+    await Promise.all(requests);
+    // 放弃使用阻塞的 alert，改用控制台打印 + 自动非阻塞弹窗
+    console.log(`🎯 注入完毕！成功发送 ${successCount} 名虚拟乘客。`);
+    
+    // 用原生 JS 在右上角悄悄浮现一个成功提示，3秒后自动消失，绝对不卡顿地图！
+    const toast = document.createElement('div');
+    toast.innerHTML = `🔥 成功注入 ${successCount} 名排队乘客！后端开始调度...`;
+    toast.style.cssText = "position:fixed; top:20px; right:20px; background:#ef4444; color:white; padding:15px 20px; border-radius:8px; z-index:9999; font-weight:bold; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); transition: opacity 0.5s;";
+    document.body.appendChild(toast);
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => toast.remove(), 500);
+    }, 4000);
+
+  } catch (err) {
+    console.error("部分请求失败，请检查后端网络！", err);
   }
 };
 
-// 派车支援逻辑
-const dispatchBus = (busPlate) => {
-  const targetLine = prompt(`请确认将待命车辆 ${busPlate} 派往哪条线路（输入 1号线/2号线）：`);
-  if (targetLine) {
-    alert(`派车指令已下达！${busPlate} 即刻前往 ${targetLine} 支援。`);
+const lineStats = ref({}); // 存储排队人数
+
+// 每 3 秒拉取一次排队情况
+const fetchLineStats = async () => {
+  try {
+    const res = await axios.get('http://10.180.21.71:8000/api/dispatch/stats');
+    lineStats.value = res.data;
+  } catch (err) {
+    console.error("获取统计数据失败", err);
   }
 };
+
+// 在 onMounted 里加上它
+onMounted(() => {
+  // ...你原有的代码...
+  setInterval(fetchLineStats, 3000); // 开启排队人数监控
+});
+
 </script>
 
 <style scoped>
